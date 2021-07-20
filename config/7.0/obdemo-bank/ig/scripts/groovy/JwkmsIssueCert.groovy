@@ -1,3 +1,6 @@
+import com.nimbusds.jose.jwk.ECKey
+import com.nimbusds.jose.jwk.JWK
+import com.nimbusds.jose.jwk.RSAKey
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.BasicConstraints;
 import org.bouncycastle.asn1.x509.Extension;
@@ -28,7 +31,11 @@ import java.io.FileInputStream;
 import java.io.InputStream
 import java.math.BigInteger;
 import java.security.*;
-import java.security.cert.X509Certificate;
+import java.security.cert.X509Certificate
+import java.security.interfaces.ECPrivateKey
+import java.security.interfaces.ECPublicKey
+import java.security.interfaces.RSAPrivateKey
+import java.security.interfaces.RSAPublicKey;
 import java.util.Calendar;
 import java.util.Date;
 import groovy.json.JsonOutput
@@ -150,37 +157,59 @@ X509CertificateHolder issuedCertHolder = issuedCertBuilder.build(csrContentSigne
 X509Certificate issuedCert  = new JcaX509CertificateConverter().setProvider(BC_PROVIDER).getCertificate(issuedCertHolder);
 
 // Verify the issued cert signature against the CA cert
-
 issuedCert.verify(caCertificate.getPublicKey(), BC_PROVIDER);
 
-// Build response with cert and private key
 
-/*
-def pemCert = Base64.getUrlEncoder().encodeToString(issuedCert.getEncoded())
-def pemKey =  Base64.getUrlEncoder().encodeToString(issuedCertKeyPair.getPrivate().getEncoded())
+def JWKJsonResponse = null
+
+// build the JWK with private key representation and blinding for the response to align the standard JSON Web Key
+// https://datatracker.ietf.org/doc/html/rfc7517#page-9
+PublicKey publicKey = issuedCert.getPublicKey()
+
+if(publicKey instanceof RSAPublicKey){
+    RSAKey rsaJWK = RSAKey.parse(issuedCert)
+
+    RSAKey.Builder builder = new RSAKey.Builder((RSAPublicKey) issuedCertKeyPair.getPublic())
+            .privateKey((RSAPrivateKey) issuedCertKeyPair.getPrivate());
+
+    List<com.nimbusds.jose.util.Base64> x5c = new ArrayList<>(rsaJWK.getX509CertChain());
+
+    JWKJsonResponse = builder.x509CertChain(x5c)
+            .x509CertSHA256Thumbprint(rsaJWK.getX509CertSHA256Thumbprint())
+            .x509CertURL(rsaJWK.getX509CertURL())
+            .algorithm(rsaJWK.getAlgorithm())
+            .keyID(rsaJWK.getKeyID())
+            .keyUse(rsaJWK.getKeyUse())
+            .build()
+            .toJSONString();
+
+} else if (publicKey instanceof ECPublicKey){
+    ECKey ecJWK = ECKey.parse(issuedCert)
+
+    ECKey.Builder builder = new ECKey.Builder((ECPublicKey) issuedCertKeyPair.getPublic())
+            .privateKey((ECPrivateKey) issuedCertKeyPair.getPrivate());
+
+    List<com.nimbusds.jose.util.Base64> x5c = new ArrayList<>(ecJWK.getX509CertChain());
+
+    JWKJsonResponse = builder.x509CertChain(x5c)
+            .x509CertSHA256Thumbprint(ecJWK.getX509CertSHA256Thumbprint())
+            .x509CertURL(ecJWK.getX509CertURL())
+            .algorithm(ecJWK.getAlgorithm())
+            .keyID(ecJWK.getKeyID())
+            .keyUse(ecJWK.getKeyUse())
+            .build()
+            .toJSONString();
+} else {
+    // unknown type, should never happen
+}
 
 
-def responseObj = [
-        "x5c": pemCert,
-        "key": pemKey
-]
-*/
 
-// should be base64url encoded to delivery as a json response
-def pemCert = Base64.getUrlEncoder().encodeToString(issuedCert.getEncoded())
-def pemKey =  Base64.getUrlEncoder().encodeToString(issuedCertKeyPair.getPrivate().getEncoded())
-
-def responseObj = [
-        "pemCert"   : pemCert,
-        "pemKey"    : pemKey
-]
-
-responseJson = JsonOutput.toJson(responseObj);
 
 Response response = new Response(Status.OK)
-response.getHeaders().add("Content-Type","application/json");
-//response.setEntity(pemCert + pemKey);
-logger.debug("Final JSON " + responseJson)
-response.setEntity(responseJson)
+response.getHeaders().add("Content-Type","application/jwk+json");
+
+logger.debug("Final JSON " + JWKJsonResponse)
+response.setEntity(JWKJsonResponse)
 
 return response
